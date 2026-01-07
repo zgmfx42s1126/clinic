@@ -520,7 +520,7 @@
             <div class="logo" id="logoToggle">
                 <i class="fas fa-clinic-medical"></i>
             </div>
-            <div class="logo-text">Clinic</div>
+            <div class="logo-text">Clinic Records</div>
             <!-- Hidden button but keeping it for structure -->
             <button class="toggle-btn" id="toggleBtn">
                 <i class="fas fa-chevron-left"></i>
@@ -574,7 +574,7 @@
                     <div class="nav-icon">
                         <i class="fas fa-chart-bar"></i>
                     </div>
-                    <div class="nav-text">Reports</div>
+                    <div class="nav-text">Reports Logs</div>
                 </a>
 
                 <a href="/clinic/admin/pages/statistics.php" class="nav-item">

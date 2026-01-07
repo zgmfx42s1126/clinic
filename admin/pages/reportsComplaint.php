@@ -13,49 +13,95 @@ if (isset($_GET['export']) && $_GET['export'] == 'true') {
     exit;
 }
 
-// Get date parameters
+// Get filter parameters
 $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-01'); // Start of current month
 $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-d'); // Today
 $report_type = isset($_GET['report_type']) ? $_GET['report_type'] : 'monthly';
+$grade_section = isset($_GET['grade_section']) ? $_GET['grade_section'] : '';
 
 // Get selected month from GET parameter (for backward compatibility)
 $selected_month = isset($_GET['month']) ? $_GET['month'] : date('Y-m');
 
-// Get available months for dropdown
-$months_sql = "SELECT DISTINCT DATE_FORMAT(date, '%Y-%m') AS month 
-               FROM clinic_records 
-               WHERE complaint IS NOT NULL AND complaint != ''
-               ORDER BY month DESC";
-$months_result = $conn->query($months_sql);
+// Get all grade sections for filter dropdown
+$all_grades_sql = "SELECT DISTINCT grade_section FROM clinic_records WHERE grade_section IS NOT NULL AND grade_section != '' ORDER BY grade_section ASC";
+$all_grades_result = $conn->query($all_grades_sql);
+
+// Pagination parameters for detailed records
+// FIX: Capture per_page parameter from URL
+$records_per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 10;
+if (!in_array($records_per_page, [10, 25, 50, 100])) {
+    $records_per_page = 10; // Default to 10 if invalid value
+}
+
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($page < 1) $page = 1;
+$offset = ($page - 1) * $records_per_page;
 
 // =======================
 // COMPLAINT REPORT QUERY (using date range)
 // =======================
-$sql = "
+$complaint_sql = "
     SELECT 
         complaint,
         COUNT(*) AS total_cases
     FROM clinic_records
     WHERE complaint IS NOT NULL AND complaint != ''
     AND date BETWEEN ? AND ?
-    GROUP BY complaint
-    ORDER BY total_cases DESC
 ";
 
-$stmt = $conn->prepare($sql);
-$stmt->bind_param("ss", $start_date, $end_date);
-$stmt->execute();
-$result = $stmt->get_result();
+$complaint_params = array($start_date, $end_date);
+$complaint_types = "ss";
 
-// Reset pointer for table
-$result->data_seek(0);
+if (!empty($grade_section)) {
+    $complaint_sql .= " AND grade_section = ?";
+    $complaint_params[] = $grade_section;
+    $complaint_types .= "s";
+}
+
+$complaint_sql .= " GROUP BY complaint ORDER BY total_cases DESC";
+
+$complaint_stmt = $conn->prepare($complaint_sql);
+$complaint_stmt->bind_param($complaint_types, ...$complaint_params);
+$complaint_stmt->execute();
+$complaint_result = $complaint_stmt->get_result();
 
 // =======================
-// DETAILED RECORDS QUERY
+// DETAILED RECORDS QUERY WITH PAGINATION
 // =======================
+// First get total count for pagination
+$count_sql = "
+    SELECT COUNT(*) as total 
+    FROM clinic_records
+    WHERE date BETWEEN ? AND ?
+";
+
+$count_params = array($start_date, $end_date);
+$count_types = "ss";
+
+if (!empty($grade_section)) {
+    $count_sql .= " AND grade_section = ?";
+    $count_params[] = $grade_section;
+    $count_types .= "s";
+}
+
+$count_stmt = $conn->prepare($count_sql);
+$count_stmt->bind_param($count_types, ...$count_params);
+$count_stmt->execute();
+$count_result = $count_stmt->get_result();
+$total_row = $count_result->fetch_assoc();
+$total_records = $total_row['total'] ?? 0;
+$count_stmt->close();
+
+// Calculate total pages
+$total_pages = ceil($total_records / $records_per_page);
+if ($page > $total_pages && $total_pages > 0) {
+    $page = $total_pages;
+    $offset = ($page - 1) * $records_per_page;
+}
+
+// Now get paginated results
 $detailed_sql = "
     SELECT 
-        id,
         student_id,
         name,
         grade_section,
@@ -65,13 +111,29 @@ $detailed_sql = "
         time
     FROM clinic_records
     WHERE date BETWEEN ? AND ?
-    ORDER BY date DESC, time DESC
 ";
 
+$detailed_params = array($start_date, $end_date);
+$detailed_types = "ss";
+
+if (!empty($grade_section)) {
+    $detailed_sql .= " AND grade_section = ?";
+    $detailed_params[] = $grade_section;
+    $detailed_types .= "s";
+}
+
+$detailed_sql .= " ORDER BY date DESC, time DESC LIMIT ? OFFSET ?";
+$detailed_params[] = $records_per_page;
+$detailed_params[] = $offset;
+$detailed_types .= "ii";
+
 $detailed_stmt = $conn->prepare($detailed_sql);
-$detailed_stmt->bind_param("ss", $start_date, $end_date);
+$detailed_stmt->bind_param($detailed_types, ...$detailed_params);
 $detailed_stmt->execute();
 $detailed_result = $detailed_stmt->get_result();
+
+// Calculate starting number for current page
+$start_number = ($page - 1) * $records_per_page + 1;
 
 // =======================
 // EXPORT FUNCTION
@@ -231,6 +293,53 @@ function exportComplaintReport() {
             background: #5a6268;
         }
         
+        /* Table controls */
+        .table-controls {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .search-section {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .search-box {
+            padding: 8px 12px;
+            border: 2px solid #ced4da;
+            border-radius: 6px;
+            min-width: 250px;
+            font-size: 14px;
+        }
+        
+        .grade-section-select {
+            padding: 8px 12px;
+            border: 2px solid #ced4da;
+            border-radius: 6px;
+            font-size: 14px;
+            min-width: 200px;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+        
+        .grade-section-select:hover {
+            border-color: #4361ee;
+        }
+        
+        .grade-section-select:focus {
+            outline: none;
+            border-color: #4361ee;
+        }
+        
         /* Keep existing styles */
         .table-container {
             margin-bottom: 30px;
@@ -245,7 +354,7 @@ function exportComplaintReport() {
             max-height: 600px;
             overflow-y: auto;
             border: 1px solid #e0e0e0;
-            border-radius: 8px;
+            border-radius: 0 0 8px 8px;
             background: white;
         }
         
@@ -306,11 +415,13 @@ function exportComplaintReport() {
             font-size: 42px;
             font-weight: bold;
             margin-bottom: 8px;
+            color: #4361ee;
         }
         
         .stat-card .label {
             font-size: 16px;
             opacity: 0.9;
+            color: #666;
         }
         
         .section-title {
@@ -336,14 +447,6 @@ function exportComplaintReport() {
             display: flex;
             justify-content: space-between;
             align-items: center;
-        }
-        
-        .month-selector select {
-            padding: 10px 15px;
-            border: 2px solid #e0e0e0;
-            border-radius: 6px;
-            font-size: 16px;
-            min-width: 200px;
         }
         
         .btn-export {
@@ -488,15 +591,165 @@ function exportComplaintReport() {
             font-size: 22px;
         }
         
+        /* Pagination Styles */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 25px;
+            gap: 10px;
+        }
+        
+        .pagination-btn {
+            padding: 8px 16px;
+            border: 2px solid #e0e0e0;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .pagination-btn:hover:not(.disabled) {
+            background: #4361ee;
+            color: white;
+            border-color: #4361ee;
+        }
+        
+        .pagination-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .page-numbers {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .page-number {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            min-width: 40px;
+            text-align: center;
+            transition: all 0.3s;
+        }
+        
+        .page-number:hover {
+            background: #f0f4ff;
+            border-color: #4361ee;
+        }
+        
+        .page-number.active {
+            background: #4361ee;
+            color: white;
+            border-color: #4361ee;
+        }
+        
+        .records-per-page {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            margin-left: auto;
+        }
+        
+        .records-per-page select {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+        }
+        
+        .pagination-info {
+            text-align: center;
+            margin-top: 10px;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        /* Table info */
+        .table-info {
+            font-size: 14px;
+            color: #4361ee;
+            background: #f0f4ff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid #dbe4ff;
+            font-weight: 600;
+        }
+        
         /* Column widths for detailed table */
         #detailedTable th:nth-child(1), #detailedTable td:nth-child(1) { width: 5%; }
-        #detailedTable th:nth-child(2), #detailedTable td:nth-child(2) { width: 10%; }
-        #detailedTable th:nth-child(3), #detailedTable td:nth-child(3) { width: 15%; }
+        #detailedTable th:nth-child(2), #detailedTable td:nth-child(2) { width: 15%; }
+        #detailedTable th:nth-child(3), #detailedTable td:nth-child(3) { width: 20%; }
         #detailedTable th:nth-child(4), #detailedTable td:nth-child(4) { width: 15%; }
-        #detailedTable th:nth-child(5), #detailedTable td:nth-child(5) { width: 15%; }
-        #detailedTable th:nth-child(6), #detailedTable td:nth-child(6) { width: 15%; }
+        #detailedTable th:nth-child(5), #detailedTable td:nth-child(5) { width: 20%; }
+        #detailedTable th:nth-child(6), #detailedTable td:nth-child(6) { width: 20%; }
         #detailedTable th:nth-child(7), #detailedTable td:nth-child(7) { width: 10%; }
-        #detailedTable th:nth-child(8), #detailedTable td:nth-child(8) { width: 15%; }
+        #detailedTable th:nth-child(8), #detailedTable td:nth-child(8) { width: 10%; }
+        
+        /* Print Whole Page Button */
+        .btn-print-whole {
+            background: #f59e0b;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.3s;
+        }
+        
+        .btn-print-whole:hover {
+            background: #d97706;
+        }
+        
+        /* Hide elements during print */
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            
+            body * {
+                visibility: hidden;
+            }
+            
+            .print-section, .print-section * {
+                visibility: visible;
+            }
+            
+            .print-section {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+            
+            table {
+                page-break-inside: auto;
+            }
+            
+            tr {
+                page-break-inside: avoid;
+                page-break-after: auto;
+            }
+            
+            thead {
+                display: table-header-group;
+            }
+        }
     </style>
 </head>
 <body>
@@ -504,16 +757,21 @@ function exportComplaintReport() {
     <div class="main-content">
         <div class="container">
             <!-- Header -->
-            <div class="header">
+            <div class="header no-print">
                 <h1>
                     <i class="fa-solid fa-chart-column"></i>
                     Monthly Complaint Report
                 </h1>
                 <p>Analysis of patient complaints by month</p>
+                <div class="table-actions">
+                    <button class="action-btn print" onclick="printWholePage()">
+                        <i class="fas fa-print"></i> Print Whole Page
+                    </button>
+                </div>
             </div>
 
             <!-- Date Range Filter -->
-            <div class="date-range-filter">
+            <div class="date-range-filter no-print">
                 <div class="date-group">
                     <label for="startDate">
                         <i class="fas fa-calendar-day"></i>
@@ -554,60 +812,98 @@ function exportComplaintReport() {
                 </div>
             </div>
 
-            <!-- Controls (Original Month Selector) -->
-            <div class="controls">
-                <div class="month-selector">
-                    <label for="monthSelect"><i class="fas fa-calendar-alt"></i> Select Month:</label>
-                    <select id="monthSelect" onchange="changeMonth(this.value)">
-                        <?php if ($months_result && $months_result->num_rows > 0): ?>
-                            <?php while ($month_row = $months_result->fetch_assoc()): ?>
-                                <option value="<?php echo $month_row['month']; ?>" 
-                                    <?php echo $month_row['month'] == $selected_month ? 'selected' : ''; ?>>
-                                    <?php echo date('F Y', strtotime($month_row['month'] . '-01')); ?>
-                                </option>
-                            <?php endwhile; ?>
-                        <?php else: ?>
-                            <option value="<?php echo date('Y-m'); ?>"><?php echo date('F Y'); ?></option>
-                        <?php endif; ?>
-                    </select>
-                </div>
-                
-                <div class="export-buttons">
-                  
-                    <button class="btn-export" onclick="printFullReport()">
-                        <i class="fas fa-print"></i>
-                        Print Report
-                    </button>
+            <!-- Print Section (visible only when printing) -->
+            <div class="print-section" style="display: none;">
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <h1 style="color: #4361ee; margin-bottom: 5px;">
+                        <i class="fa-solid fa-chart-column"></i>
+                        Monthly Complaint Report
+                    </h1>
+                    <p style="color: #666; margin-bottom: 20px;">Analysis of patient complaints by month</p>
+                    
+                    <div style="background: #f8fafc; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <h2 style="color: #4361ee; margin-bottom: 10px; font-size: 18px;">
+                            <i class="fas fa-calendar-week"></i>
+                            Analysis for <?php echo date('F j, Y', strtotime($start_date)); ?> to <?php echo date('F j, Y', strtotime($end_date)); ?>
+                            <?php if (!empty($grade_section)): ?>
+                                <span style="font-size: 14px; color: #666;">
+                                    (Filtered by: <?php echo htmlspecialchars($grade_section); ?>)
+                                </span>
+                            <?php endif; ?>
+                        </h2>
+                        
+                        <div style="display: flex; justify-content: center; gap: 20px; margin-top: 15px;">
+                            <?php 
+                            $total_cases = 0;
+                            $complaint_types = 0;
+                            if ($complaint_result && $complaint_result->num_rows > 0) {
+                                $complaint_types = $complaint_result->num_rows;
+                                $complaint_result->data_seek(0);
+                                while ($row = $complaint_result->fetch_assoc()) {
+                                    $total_cases += $row['total_cases'];
+                                }
+                                $complaint_result->data_seek(0);
+                            }
+                            ?>
+                            <div style="text-align: center; padding: 10px; min-width: 100px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #4361ee;"><?php echo $complaint_types; ?></div>
+                                <div style="font-size: 12px; color: #666;">Complaint Types</div>
+                            </div>
+                            <div style="text-align: center; padding: 10px; min-width: 100px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #4361ee;"><?php echo $total_cases; ?></div>
+                                <div style="font-size: 12px; color: #666;">Total Cases</div>
+                            </div>
+                            <div style="text-align: center; padding: 10px; min-width: 100px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #4361ee;"><?php echo $total_records; ?></div>
+                                <div style="font-size: 12px; color: #666;">Total Records</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="text-align: left; color: #666; font-size: 12px; margin-bottom: 20px;">
+                        Generated: <?php echo date('F d, Y h:i A'); ?><br>
+                        Report Type: <?php echo ucfirst($report_type); ?> Analysis
+                    </div>
                 </div>
             </div>
 
             <!-- Month Display -->
-            <div class="month-display">
+            <div class="month-display no-print">
                 <h2>
                     <i class="fas fa-calendar-week"></i>
-                    Analysis for <?php echo date('F Y', strtotime($selected_month . '-01')); ?>
+                    Analysis for <?php echo date('F j, Y', strtotime($start_date)); ?> to <?php echo date('F j, Y', strtotime($end_date)); ?>
+                    <?php if (!empty($grade_section)): ?>
+                        <span style="font-size: 16px; color: #666; margin-left: 10px;">
+                            (Filtered by: <?php echo htmlspecialchars($grade_section); ?>)
+                        </span>
+                    <?php endif; ?>
                 </h2>
                 
                 <!-- Stats Cards -->
                 <div class="stats-cards">
                     <?php 
                     $total_cases = 0;
-                    $total_records = 0;
-                    if ($result && $result->num_rows > 0) {
-                        $result->data_seek(0);
-                        while ($row = $result->fetch_assoc()) {
+                    $complaint_types = 0;
+                    if ($complaint_result && $complaint_result->num_rows > 0) {
+                        $complaint_types = $complaint_result->num_rows;
+                        $complaint_result->data_seek(0);
+                        while ($row = $complaint_result->fetch_assoc()) {
                             $total_cases += $row['total_cases'];
                         }
-                        $result->data_seek(0);
+                        $complaint_result->data_seek(0);
                     }
                     ?>
                     <div class="stat-card">
-                        <div class="number"><?php echo $result ? $result->num_rows : 0; ?></div>
+                        <div class="number"><?php echo $complaint_types; ?></div>
                         <div class="label">Complaint Types</div>
                     </div>
                     <div class="stat-card">
                         <div class="number"><?php echo $total_cases; ?></div>
                         <div class="label">Total Cases</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="number"><?php echo $total_records; ?></div>
+                        <div class="label">Total Records</div>
                     </div>
                 </div>
             </div>
@@ -616,17 +912,17 @@ function exportComplaintReport() {
             <div class="content">
                 <!-- Complaint Table -->
                 <div class="table-container">
-                    <div class="section-title">
+                    <div class="section-title no-print">
                         <div><i class="fas fa-table"></i> Complaint Details</div>
                         <div class="table-actions">
                             <button class="action-btn print" onclick="printTable('complaintTable', 'Complaint Report')">
-                                <i class="fas fa-print"></i> Print
+                                <i class="fas fa-print"></i> Print Table
                             </button>
                         </div>
                     </div>
                     
                     <div class="table-wrapper">
-                        <?php if ($result && $result->num_rows > 0): ?>
+                        <?php if ($complaint_result && $complaint_result->num_rows > 0): ?>
                             <table id="complaintTable">
                                 <thead>
                                     <tr>
@@ -640,10 +936,10 @@ function exportComplaintReport() {
                                     <?php 
                                     $count = 1;
                                     $total_cases = 0;
-                                    $result->data_seek(0);
-                                    while ($row = $result->fetch_assoc()) $total_cases += $row['total_cases'];
-                                    $result->data_seek(0);
-                                    while ($row = $result->fetch_assoc()):
+                                    $complaint_result->data_seek(0);
+                                    while ($row = $complaint_result->fetch_assoc()) $total_cases += $row['total_cases'];
+                                    $complaint_result->data_seek(0);
+                                    while ($row = $complaint_result->fetch_assoc()):
                                         $percentage = $total_cases > 0 ? round(($row['total_cases'] / $total_cases) * 100, 1) : 0;
                                     ?>
                                         <tr>
@@ -665,8 +961,8 @@ function exportComplaintReport() {
                         <?php else: ?>
                             <div class="no-data">
                                 <i class="fas fa-clipboard-list"></i>
-                                <h3>No complaint data for selected date range</h3>
-                                <p>Try selecting a different date range from the filter above.</p>
+                                <h3>No complaint data for selected filters</h3>
+                                <p>Try selecting a different date range or section.</p>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -674,12 +970,41 @@ function exportComplaintReport() {
                 
                 <!-- Detailed Records Table -->
                 <div class="table-container">
-                    <div class="section-title">
+                    <div class="section-title no-print">
                         <div><i class="fas fa-list"></i> Detailed Clinic Records</div>
                         <div class="table-actions">
                             <button class="action-btn print" onclick="printTable('detailedTable', 'Clinic Records Report')">
-                                <i class="fas fa-print"></i> Print
+                                <i class="fas fa-print"></i> Print Table
                             </button>
+                        </div>
+                    </div>
+                    
+                    <div class="table-controls no-print">
+                        <div class="search-section">
+                            <input type="text" id="searchInput" class="search-box" placeholder="Search records...">
+                            
+                            <!-- Grade & Section Filter -->
+                            <select id="gradeSectionFilter" class="grade-section-select" onchange="applyFilters()">
+                                <option value="">All Grades & Sections</option>
+                                <?php if ($all_grades_result && $all_grades_result->num_rows > 0): ?>
+                                    <?php while ($grade_row = $all_grades_result->fetch_assoc()): ?>
+                                        <option value="<?php echo htmlspecialchars($grade_row['grade_section']); ?>" 
+                                            <?php echo $grade_row['grade_section'] == $grade_section ? 'selected' : ''; ?>>
+                                            <?php echo htmlspecialchars($grade_row['grade_section']); ?>
+                                        </option>
+                                    <?php endwhile; ?>
+                                <?php endif; ?>
+                            </select>
+                        </div>
+                        
+                        <div class="table-info">
+                            <?php if (!empty($grade_section)): ?>
+                                Showing <?php echo min($records_per_page, $total_records - $offset); ?> of <?php echo $total_records; ?> records for <?php echo htmlspecialchars($grade_section); ?>
+                                (<?php echo $records_per_page; ?> per page)
+                            <?php else: ?>
+                                Showing <?php echo min($records_per_page, $total_records - $offset); ?> of <?php echo $total_records; ?> records
+                                (<?php echo $records_per_page; ?> per page)
+                            <?php endif; ?>
                         </div>
                     </div>
                     
@@ -688,7 +1013,8 @@ function exportComplaintReport() {
                             <table id="detailedTable">
                                 <thead>
                                     <tr>
-                                        <th>ID</th>
+                                        <!-- Added Numbering column -->
+                                        <th>#</th>
                                         <th>Student ID</th>
                                         <th>Name</th>
                                         <th>Grade & Section</th>
@@ -700,11 +1026,12 @@ function exportComplaintReport() {
                                 </thead>
                                 <tbody>
                                     <?php 
-                                    $i = 1;
+                                    $current_number = $start_number;
                                     while ($row = $detailed_result->fetch_assoc()):
                                     ?>
                                         <tr>
-                                            <td><?php echo $row['id']; ?></td>
+                                            <!-- Added Numbering column -->
+                                            <td><?php echo $current_number++; ?></td>
                                             <td><?php echo htmlspecialchars($row['student_id']); ?></td>
                                             <td><?php echo htmlspecialchars($row['name']); ?></td>
                                             <td><?php echo htmlspecialchars($row['grade_section']); ?></td>
@@ -716,11 +1043,80 @@ function exportComplaintReport() {
                                     <?php endwhile; ?>
                                 </tbody>
                             </table>
+                            
+                            <!-- Pagination -->
+                            <?php if ($total_pages > 1): ?>
+                            <div class="pagination no-print">
+                                <!-- Previous Button -->
+                                <button class="pagination-btn <?php echo $page <= 1 ? 'disabled' : ''; ?>" 
+                                        onclick="changePage(<?php echo $page - 1; ?>)" 
+                                        <?php echo $page <= 1 ? 'disabled' : ''; ?>>
+                                    <i class="fas fa-chevron-left"></i> Previous
+                                </button>
+                                
+                                <!-- Page Numbers -->
+                                <div class="page-numbers">
+                                    <?php
+                                    // Show first page
+                                    if ($page > 3): ?>
+                                        <button class="page-number" onclick="changePage(1)">1</button>
+                                        <?php if ($page > 4): ?>
+                                            <span class="page-number" style="border: none; background: transparent;">...</span>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                    
+                                    <?php
+                                    // Show pages around current page
+                                    for ($i = max(1, $page - 2); $i <= min($total_pages, $page + 2); $i++): ?>
+                                        <button class="page-number <?php echo $i == $page ? 'active' : ''; ?>" 
+                                                onclick="changePage(<?php echo $i; ?>)">
+                                            <?php echo $i; ?>
+                                        </button>
+                                    <?php endfor; ?>
+                                    
+                                    <?php
+                                    // Show last page
+                                    if ($page < $total_pages - 2): ?>
+                                        <?php if ($page < $total_pages - 3): ?>
+                                            <span class="page-number" style="border: none; background: transparent;">...</span>
+                                        <?php endif; ?>
+                                        <button class="page-number" onclick="changePage(<?php echo $total_pages; ?>)">
+                                            <?php echo $total_pages; ?>
+                                        </button>
+                                    <?php endif; ?>
+                                </div>
+                                
+                                <!-- Next Button -->
+                                <button class="pagination-btn <?php echo $page >= $total_pages ? 'disabled' : ''; ?>" 
+                                        onclick="changePage(<?php echo $page + 1; ?>)" 
+                                        <?php echo $page >= $total_pages ? 'disabled' : ''; ?>>
+                                    Next <i class="fas fa-chevron-right"></i>
+                                </button>
+                                
+                                <!-- Records per page selector - ALWAYS VISIBLE -->
+                                <div class="records-per-page">
+                                    <span>Show:</span>
+                                    <select onchange="changeRecordsPerPage(this.value)" id="recordsPerPageSelect">
+                                        <option value="10" <?php echo $records_per_page == 10 ? 'selected' : ''; ?>>10</option>
+                                        <option value="25" <?php echo $records_per_page == 25 ? 'selected' : ''; ?>>25</option>
+                                        <option value="50" <?php echo $records_per_page == 50 ? 'selected' : ''; ?>>50</option>
+                                        <option value="100" <?php echo $records_per_page == 100 ? 'selected' : ''; ?>>100</option>
+                                    </select>
+                                    <span>per page</span>
+                                </div>
+                            </div>
+                            
+                            <div class="pagination-info no-print">
+                                Page <?php echo $page; ?> of <?php echo $total_pages; ?> • 
+                                Records <?php echo min($offset + 1, $total_records); ?>-<?php echo min($offset + $records_per_page, $total_records); ?> of <?php echo $total_records; ?>
+                            </div>
+                            <?php endif; ?>
+                            
                         <?php else: ?>
                             <div class="no-data">
                                 <i class="fas fa-clipboard-list"></i>
-                                <h3>No detailed records found for selected date range</h3>
-                                <p>Try selecting a different date range from the filter above.</p>
+                                <h3>No detailed records found for selected filters</h3>
+                                <p>Try selecting a different date range or section.</p>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -730,16 +1126,28 @@ function exportComplaintReport() {
     </div>
 
     <script>
-        function changeMonth(month) {
-            window.location.href = `?month=${month}`;
-        }
-        
-        function applyDateFilter() {
+        function applyFilters() {
             const startDate = document.getElementById('startDate').value;
             const endDate = document.getElementById('endDate').value;
             const reportType = document.getElementById('reportType').value;
+            const gradeSection = document.getElementById('gradeSectionFilter').value;
+            const perPageSelect = document.getElementById('recordsPerPageSelect');
+            const currentPerPage = perPageSelect ? perPageSelect.value : 10;
             
-            window.location.href = `?start_date=${startDate}&end_date=${endDate}&report_type=${reportType}`;
+            // Build URL with all parameters (reset to page 1 when filtering)
+            let url = `?start_date=${startDate}&end_date=${endDate}&report_type=${reportType}&page=1&per_page=${currentPerPage}`;
+            
+            // Only add grade_section if it's not empty
+            if (gradeSection) {
+                url += `&grade_section=${gradeSection}`;
+            }
+            
+            window.location.href = url;
+        }
+        
+        function applyDateFilter() {
+            // Same as applyFilters but triggers when date filter is applied
+            applyFilters();
         }
         
         function resetDateFilter() {
@@ -751,8 +1159,50 @@ function exportComplaintReport() {
             document.getElementById('startDate').value = firstDayStr;
             document.getElementById('endDate').value = today;
             document.getElementById('reportType').value = 'monthly';
+            document.getElementById('gradeSectionFilter').value = '';
             
-            applyDateFilter();
+            // Reset per page to default
+            const perPageSelect = document.getElementById('recordsPerPageSelect');
+            if (perPageSelect) {
+                perPageSelect.value = '10';
+            }
+            
+            // Apply filters with default values
+            applyFilters();
+        }
+        
+        function changePage(newPage) {
+            if (newPage < 1 || newPage > <?php echo $total_pages; ?>) return;
+            
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const reportType = document.getElementById('reportType').value;
+            const gradeSection = document.getElementById('gradeSectionFilter').value;
+            const perPageSelect = document.getElementById('recordsPerPageSelect');
+            const currentPerPage = perPageSelect ? perPageSelect.value : 10;
+            
+            let url = `?start_date=${startDate}&end_date=${endDate}&report_type=${reportType}&page=${newPage}&per_page=${currentPerPage}`;
+            
+            if (gradeSection) {
+                url += `&grade_section=${gradeSection}`;
+            }
+            
+            window.location.href = url;
+        }
+        
+        function changeRecordsPerPage(perPage) {
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const reportType = document.getElementById('reportType').value;
+            const gradeSection = document.getElementById('gradeSectionFilter').value;
+            
+            let url = `?start_date=${startDate}&end_date=${endDate}&report_type=${reportType}&page=1&per_page=${perPage}`;
+            
+            if (gradeSection) {
+                url += `&grade_section=${gradeSection}`;
+            }
+            
+            window.location.href = url;
         }
         
         function exportToExcel() {
@@ -769,6 +1219,7 @@ function exportComplaintReport() {
             const startDate = document.getElementById('startDate').value;
             const endDate = document.getElementById('endDate').value;
             const reportType = document.getElementById('reportType').value;
+            const gradeSection = document.getElementById('gradeSectionFilter').value;
             
             const win = window.open('', '', 'width=1200,height=700');
             win.document.write(`
@@ -793,6 +1244,7 @@ function exportComplaintReport() {
                     <h1>${title}</h1>
                     <div class="report-info">
                         Date Range: ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}<br>
+                        ${gradeSection ? `Section: ${gradeSection}<br>` : ''}
                         Report Type: ${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Analysis<br>
                         Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}
                     </div>
@@ -805,62 +1257,100 @@ function exportComplaintReport() {
             setTimeout(() => win.print(), 500);
         }
         
-        function printFullReport() {
-            const startDate = document.getElementById('startDate').value;
-            const endDate = document.getElementById('endDate').value;
-            const reportType = document.getElementById('reportType').value;
+        function printWholePage() {
+            // Update print section content
+            const printSection = document.querySelector('.print-section');
             
-            const printWindow = window.open('', '', 'width=1400,height=900');
-            printWindow.document.write(`
-                <html>
-                <head>
-                    <title>Full Clinic Report</title>
-                    <style>
-                        body { font-family: Arial, sans-serif; padding: 40px; background: #f5f7fa; }
-                        .report-container { max-width: 1200px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 5px 20px rgba(0,0,0,0.1); }
-                        .report-header { text-align: center; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 3px solid #4361ee; }
-                        .report-header h1 { color: #4361ee; font-size: 32px; margin-bottom: 10px; }
-                        .report-info { text-align: center; margin-bottom: 30px; color: #6c757d; }
-                        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-                        th { background: #4361ee; color: white; padding: 15px; text-align: left; }
-                        td { padding: 12px; border-bottom: 1px solid #eef0f3; }
-                        .section-title { color: #4361ee; font-size: 20px; margin: 30px 0 15px 0; }
-                        @media print {
-                            body { padding: 0; background: white; }
-                            .report-container { box-shadow: none; padding: 20px; }
-                        }
-                    </style>
-                </head>
-                <body>
-                    <div class="report-container">
-                        <div class="report-header">
-                            <h1>Clinic Records Report</h1>
-                            <div class="report-info">
-                                Date Range: ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}<br>
-                                Report Type: ${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Analysis<br>
-                                Generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}
+            // Clone the complaint table for print
+            const complaintTable = document.getElementById('complaintTable').cloneNode(true);
+            
+            // Clone the detailed table for print (with all records, not just current page)
+            let detailedTableHTML = '';
+            
+            // Create a print-friendly version of both tables
+            printSection.innerHTML = `
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <h1 style="color: #4361ee; margin-bottom: 5px;">
+                        <i class="fa-solid fa-chart-column"></i>
+                        Monthly Complaint Report
+                    </h1>
+                    <p style="color: #666; margin-bottom: 20px;">Analysis of patient complaints by month</p>
+                    
+                    <div style="background: #f8fafc; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                        <h2 style="color: #4361ee; margin-bottom: 10px; font-size: 18px;">
+                            <i class="fas fa-calendar-week"></i>
+                            Analysis for ${new Date(document.getElementById('startDate').value).toLocaleDateString()} to ${new Date(document.getElementById('endDate').value).toLocaleDateString()}
+                            ${document.getElementById('gradeSectionFilter').value ? `<span style="font-size: 14px; color: #666;">(Filtered by: ${document.getElementById('gradeSectionFilter').value})</span>` : ''}
+                        </h2>
+                        
+                        <div style="display: flex; justify-content: center; gap: 20px; margin-top: 15px;">
+                            <div style="text-align: center; padding: 10px; min-width: 100px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #4361ee;">${document.querySelector('.stat-card:nth-child(1) .number').textContent}</div>
+                                <div style="font-size: 12px; color: #666;">Complaint Types</div>
+                            </div>
+                            <div style="text-align: center; padding: 10px; min-width: 100px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #4361ee;">${document.querySelector('.stat-card:nth-child(2) .number').textContent}</div>
+                                <div style="font-size: 12px; color: #666;">Total Cases</div>
+                            </div>
+                            <div style="text-align: center; padding: 10px; min-width: 100px;">
+                                <div style="font-size: 24px; font-weight: bold; color: #4361ee;">${document.querySelector('.stat-card:nth-child(3) .number').textContent}</div>
+                                <div style="font-size: 12px; color: #666;">Total Records</div>
                             </div>
                         </div>
-                        
-                        <div class="section-title">Complaint Summary</div>
-                        ${document.getElementById('complaintTable') ? document.getElementById('complaintTable').outerHTML : '<p>No complaint summary available</p>'}
-                        
-                        <div class="section-title">Detailed Clinic Records</div>
-                        ${document.getElementById('detailedTable') ? document.getElementById('detailedTable').outerHTML : '<p>No detailed records available</p>'}
                     </div>
-                </body>
-                </html>
-            `);
-            printWindow.document.close();
+                    
+                    <div style="text-align: left; color: #666; font-size: 12px; margin-bottom: 20px;">
+                        Generated: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}<br>
+                        Report Type: ${document.getElementById('reportType').value.charAt(0).toUpperCase() + document.getElementById('reportType').value.slice(1)} Analysis<br>
+                        Showing: ${<?php echo min($records_per_page, $total_records - $offset); ?>} records per page (Page ${<?php echo $page; ?>} of ${<?php echo $total_pages; ?>})
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 40px;">
+                    <h3 style="color: #4361ee; border-bottom: 2px solid #4361ee; padding-bottom: 5px; margin-bottom: 15px;">
+                        Complaint Summary
+                    </h3>
+                    ${document.getElementById('complaintTable').outerHTML}
+                </div>
+                
+                <div style="margin-bottom: 40px;">
+                    <h3 style="color: #4361ee; border-bottom: 2px solid #4361ee; padding-bottom: 5px; margin-bottom: 15px;">
+                        Detailed Clinic Records (Page ${<?php echo $page; ?>} of ${<?php echo $total_pages; ?>})
+                    </h3>
+                    ${document.getElementById('detailedTable').outerHTML}
+                </div>
+            `;
             
-            setTimeout(() => {
-                printWindow.focus();
-                printWindow.print();
-            }, 500);
+            // Show print section and hide everything else
+            printSection.style.display = 'block';
+            
+            // Trigger print
+            window.print();
+            
+            // Hide print section after printing
+            printSection.style.display = 'none';
         }
         
-        // Animate percentage bars on load
+        // Search function for detailed table
         document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('searchInput');
+            const rows = document.querySelectorAll('#detailedTable tbody tr');
+            
+            if (searchInput && rows.length > 0) {
+                searchInput.addEventListener('keyup', () => {
+                    const value = searchInput.value.toLowerCase();
+                    
+                    rows.forEach(row => {
+                        if (row.innerText.toLowerCase().includes(value)) {
+                            row.style.display = '';
+                        } else {
+                            row.style.display = 'none';
+                        }
+                    });
+                });
+            }
+            
+            // Animate percentage bars on load
             const bars = document.querySelectorAll('.bar-fill');
             bars.forEach((bar, index) => {
                 const currentWidth = bar.style.width;

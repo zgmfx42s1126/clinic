@@ -7,27 +7,23 @@ if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
-// Get filter parameters - Updated defaults to first and last day of current month
-$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-01'); // First day of current month
-$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-t'); // Last day of current month
+// Get filter parameters
+$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-01');
+$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-t');
 $report_type = isset($_GET['report_type']) ? $_GET['report_type'] : 'Monthly Analysis';
+$grade_section = isset($_GET['grade_section']) ? $_GET['grade_section'] : '';
 
-// Automatically get user's grade section from session or database
+// Pagination parameters
+$records_per_page = 10;
+$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($page < 1) $page = 1;
+$offset = ($page - 1) * $records_per_page;
 
-$grade_section = '';
-
-// Try to get grade section from session
-if (isset($_SESSION['user_grade_section']) && !empty($_SESSION['user_grade_section'])) {
-    $grade_section = $_SESSION['user_grade_section'];
-} 
-// Or from URL parameter (if you still want to allow override)
-elseif (isset($_GET['grade_section']) && !empty($_GET['grade_section'])) {
-    $grade_section = $_GET['grade_section'];
-} 
-// Or from user profile in database
-else {
-    // Assuming user ID is stored in session
-    if (isset($_SESSION['user_id'])) {
+// Only auto-detect grade section if not provided via filter
+if (empty($grade_section)) {
+    if (isset($_SESSION['user_grade_section']) && !empty($_SESSION['user_grade_section'])) {
+        $grade_section = $_SESSION['user_grade_section'];
+    } elseif (isset($_SESSION['user_id'])) {
         $user_id = $_SESSION['user_id'];
         $user_sql = "SELECT grade_section FROM users WHERE id = ?";
         $user_stmt = $conn->prepare($user_sql);
@@ -41,7 +37,66 @@ else {
     }
 }
 
-// Build the base SQL query
+// Update dates based on report type (only if dates are default or empty)
+if ((empty($_GET['start_date']) && empty($_GET['end_date'])) || 
+    ($start_date == date('Y-m-01') && $end_date == date('Y-m-t'))) {
+    
+    $endDateObj = new DateTime($end_date);
+    $startDateObj = new DateTime($end_date);
+    
+    switch($report_type) {
+        case 'Weekly Analysis':
+            $startDateObj->modify('-7 days');
+            $start_date = $startDateObj->format('Y-m-d');
+            break;
+        case 'Monthly Analysis':
+            break;
+        case 'Yearly Analysis':
+            $startDateObj->modify('-1 year');
+            $start_date = $startDateObj->format('Y-m-d');
+            break;
+    }
+}
+
+// Build the base SQL query for counting total records
+$count_sql = "SELECT COUNT(*) as total FROM clinic_records WHERE 1=1";
+$count_params = array();
+$count_types = "";
+
+// Add date filter
+if (!empty($start_date) && !empty($end_date)) {
+    $count_sql .= " AND date BETWEEN ? AND ?";
+    $count_params[] = $start_date;
+    $count_params[] = $end_date;
+    $count_types .= "ss";
+}
+
+// Add grade/section filter
+if (!empty($grade_section)) {
+    $count_sql .= " AND grade_section = ?";
+    $count_params[] = $grade_section;
+    $count_types .= "s";
+}
+
+// Get total records count
+$count_stmt = $conn->prepare($count_sql);
+if (!empty($count_params)) {
+    $count_stmt->bind_param($count_types, ...$count_params);
+}
+$count_stmt->execute();
+$count_result = $count_stmt->get_result();
+$total_row = $count_result->fetch_assoc();
+$total_records = $total_row['total'] ?? 0;
+$count_stmt->close();
+
+// Calculate total pages
+$total_pages = ceil($total_records / $records_per_page);
+if ($page > $total_pages && $total_pages > 0) {
+    $page = $total_pages;
+    $offset = ($page - 1) * $records_per_page;
+}
+
+// Build the main SQL query with pagination
 $sql = "SELECT * FROM clinic_records WHERE 1=1";
 $params = array();
 $types = "";
@@ -54,15 +109,18 @@ if (!empty($start_date) && !empty($end_date)) {
     $types .= "ss";
 }
 
-// Add grade/section filter (always applied automatically)
+// Add grade/section filter
 if (!empty($grade_section)) {
     $sql .= " AND grade_section = ?";
     $params[] = $grade_section;
     $types .= "s";
 }
 
-// Order by
-$sql .= " ORDER BY date DESC, time DESC";
+// Order by and add pagination
+$sql .= " ORDER BY date DESC, time DESC LIMIT ? OFFSET ?";
+$params[] = $records_per_page;
+$params[] = $offset;
+$types .= "ii";
 
 // Prepare and execute the query
 $stmt = $conn->prepare($sql);
@@ -71,9 +129,6 @@ if (!empty($params)) {
 }
 $stmt->execute();
 $result = $stmt->get_result();
-
-// Get total records
-$total_records = $result ? $result->num_rows : 0;
 
 // Get all grade sections for filter dropdown
 $all_grades_sql = "SELECT DISTINCT grade_section FROM clinic_records WHERE grade_section IS NOT NULL AND grade_section != '' ORDER BY grade_section ASC";
@@ -86,15 +141,31 @@ $stats_sql = "SELECT
                 SUM(CASE WHEN treatment IS NULL OR treatment = '' THEN 1 ELSE 0 END) as pending
               FROM clinic_records WHERE 1=1";
               
+$stats_params = array();
+$stats_types = "";
+$stats_where = "";
+
 if (!empty($start_date) && !empty($end_date)) {
-    $stats_sql .= " AND date BETWEEN '$start_date' AND '$end_date'";
+    $stats_where .= " AND date BETWEEN ? AND ?";
+    $stats_params[] = $start_date;
+    $stats_params[] = $end_date;
+    $stats_types .= "ss";
 }
 if (!empty($grade_section)) {
-    $stats_sql .= " AND grade_section = '$grade_section'";
+    $stats_where .= " AND grade_section = ?";
+    $stats_params[] = $grade_section;
+    $stats_types .= "s";
 }
 
-$stats_result = $conn->query($stats_sql);
+$stats_sql .= $stats_where;
+$stats_stmt = $conn->prepare($stats_sql);
+if (!empty($stats_params)) {
+    $stats_stmt->bind_param($stats_types, ...$stats_params);
+}
+$stats_stmt->execute();
+$stats_result = $stats_stmt->get_result();
 $stats = $stats_result ? $stats_result->fetch_assoc() : ['total' => 0, 'treated' => 0, 'pending' => 0];
+$stats_stmt->close();
 
 $report_date = date('F d, Y');
 $report_time = date('h:i A');
@@ -262,6 +333,83 @@ $image_exists = file_exists($server_path);
             border: 1px solid #dbe4ff;
         }
         
+        /* Pagination Styles */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        
+        .pagination-btn {
+            padding: 8px 16px;
+            border: 2px solid #e0e0e0;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .pagination-btn:hover:not(.disabled) {
+            background: #4361ee;
+            color: white;
+            border-color: #4361ee;
+        }
+        
+        .pagination-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .page-numbers {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .page-number {
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            min-width: 40px;
+            text-align: center;
+            transition: all 0.3s;
+        }
+        
+        .page-number:hover {
+            background: #f0f4ff;
+            border-color: #4361ee;
+        }
+        
+        .page-number.active {
+            background: #4361ee;
+            color: white;
+            border-color: #4361ee;
+        }
+        
+        .records-per-page {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            margin-left: auto;
+        }
+        
+        .records-per-page select {
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
         /* Keep existing styles */
         .page {
             width: 210mm;
@@ -295,7 +443,7 @@ $image_exists = file_exists($server_path);
             }
 
             .main-content, .sidebar, .header, .table-controls, .no-print,
-            .filter-section {
+            .filter-section, .pagination {
                 display: none !important;
             }
 
@@ -422,6 +570,14 @@ $image_exists = file_exists($server_path);
             margin-bottom: 10px;
             color: #4b5563;
         }
+        
+        /* Pagination info */
+        .pagination-info {
+            font-size: 14px;
+            color: #666;
+            margin-top: 10px;
+            text-align: right;
+        }
     </style>
 </head>
 <body>
@@ -489,7 +645,7 @@ $image_exists = file_exists($server_path);
                         <option value="pending">Pending</option>
                     </select>
                     
-                    <!-- Grade & Section Filter - MOVED TO RIGHT SIDE -->
+                    <!-- Grade & Section Filter -->
                     <select class="filter-select grade-section-select" onchange="applyFilters()" id="gradeSectionFilter">
                         <option value="">All Grades & Sections</option>
                         <?php if ($all_grades_result && $all_grades_result->num_rows > 0): ?>
@@ -505,9 +661,9 @@ $image_exists = file_exists($server_path);
                 
                 <div class="table-info">
                     <?php if (!empty($grade_section)): ?>
-                        Showing <?php echo $total_records; ?> record(s) for <?php echo htmlspecialchars($grade_section); ?>
+                        Showing <?php echo min($records_per_page, $total_records - $offset); ?> of <?php echo $total_records; ?> record(s) for <?php echo htmlspecialchars($grade_section); ?> from <?php echo date('M d, Y', strtotime($start_date)); ?> to <?php echo date('M d, Y', strtotime($end_date)); ?>
                     <?php else: ?>
-                        Showing <?php echo $total_records; ?> record(s)
+                        Showing <?php echo min($records_per_page, $total_records - $offset); ?> of <?php echo $total_records; ?> record(s) from <?php echo date('M d, Y', strtotime($start_date)); ?> to <?php echo date('M d, Y', strtotime($end_date)); ?>
                     <?php endif; ?>
                 </div>
             </div>
@@ -517,7 +673,7 @@ $image_exists = file_exists($server_path);
                     <table id="patientsTable">
                         <thead>
                             <tr>
-                                <th>ID</th>
+                                <!-- REMOVED: <th>ID</th> -->
                                 <th>Student ID</th>
                                 <th>Name</th>
                                 <th>Grade & Section</th>
@@ -531,7 +687,7 @@ $image_exists = file_exists($server_path);
                         <tbody>
                             <?php while($row = $result->fetch_assoc()): ?>
                             <tr>
-                                <td><?php echo htmlspecialchars($row['id'] ?? ''); ?></td>
+                                <!-- REMOVED: <td><?php echo htmlspecialchars($row['id'] ?? ''); ?></td> -->
                                 <td><?php echo htmlspecialchars($row['student_id'] ?? ''); ?></td>
                                 <td><strong><?php echo htmlspecialchars($row['name'] ?? ''); ?></strong></td>
                                 <td><?php echo htmlspecialchars($row['grade_section'] ?? ''); ?></td>
@@ -550,6 +706,73 @@ $image_exists = file_exists($server_path);
                             <?php endwhile; ?>
                         </tbody>
                     </table>
+                    
+                    <!-- Pagination -->
+                    <div class="pagination">
+                        <!-- Previous Button -->
+                        <button class="pagination-btn <?php echo $page <= 1 ? 'disabled' : ''; ?>" 
+                                onclick="changePage(<?php echo $page - 1; ?>)" 
+                                <?php echo $page <= 1 ? 'disabled' : ''; ?>>
+                            <i class="fas fa-chevron-left"></i> Previous
+                        </button>
+                        
+                        <!-- Page Numbers -->
+                        <div class="page-numbers">
+                            <?php
+                            // Show first page
+                            if ($page > 3): ?>
+                                <button class="page-number" onclick="changePage(1)">1</button>
+                                <?php if ($page > 4): ?>
+                                    <span class="page-number">...</span>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                            
+                            <?php
+                            // Show pages around current page
+                            for ($i = max(1, $page - 2); $i <= min($total_pages, $page + 2); $i++): ?>
+                                <button class="page-number <?php echo $i == $page ? 'active' : ''; ?>" 
+                                        onclick="changePage(<?php echo $i; ?>)">
+                                    <?php echo $i; ?>
+                                </button>
+                            <?php endfor; ?>
+                            
+                            <?php
+                            // Show last page
+                            if ($page < $total_pages - 2): ?>
+                                <?php if ($page < $total_pages - 3): ?>
+                                    <span class="page-number">...</span>
+                                <?php endif; ?>
+                                <button class="page-number" onclick="changePage(<?php echo $total_pages; ?>)">
+                                    <?php echo $total_pages; ?>
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                        
+                        <!-- Next Button -->
+                        <button class="pagination-btn <?php echo $page >= $total_pages ? 'disabled' : ''; ?>" 
+                                onclick="changePage(<?php echo $page + 1; ?>)" 
+                                <?php echo $page >= $total_pages ? 'disabled' : ''; ?>>
+                            Next <i class="fas fa-chevron-right"></i>
+                        </button>
+                        
+                        <!-- Records per page selector -->
+                        <div class="records-per-page">
+                            <span>Show:</span>
+                            <select onchange="changeRecordsPerPage(this.value)">
+                                <option value="10" <?php echo $records_per_page == 10 ? 'selected' : ''; ?>>10</option>
+                                <option value="25" <?php echo $records_per_page == 25 ? 'selected' : ''; ?>>25</option>
+                                <option value="50" <?php echo $records_per_page == 50 ? 'selected' : ''; ?>>50</option>
+                                <option value="100" <?php echo $records_per_page == 100 ? 'selected' : ''; ?>>100</option>
+                            </select>
+                            <span>per page</span>
+                        </div>
+                    </div>
+                    
+                    <div class="pagination-info">
+                        Page <?php echo $page; ?> of <?php echo $total_pages; ?> • 
+                        Records <?php echo min($offset + 1, $total_records); ?>-<?php echo min($offset + $records_per_page, $total_records); ?> of <?php echo $total_records; ?>
+                    </div>
+                    
                 <?php else: ?>
                     <div class="empty-state">
                         <i class="fas fa-clipboard-list"></i>
@@ -561,7 +784,7 @@ $image_exists = file_exists($server_path);
         </div>
     </div>
 
-    <!-- PRINT TEMPLATE -->
+    <!-- PRINT TEMPLATE (without pagination) -->
     <div class="print-template">
         <div class="page">
             <!-- UPDATED: Simple format like the second image -->
@@ -647,32 +870,60 @@ $image_exists = file_exists($server_path);
                 <table class="print-table" style="width: 100%; border-collapse: collapse; background: rgba(255,255,255,0.95);">
                     <thead>
                         <tr style="background-color: #f2f2f2;">
-                            <th style="border: 1px solid #000; padding: 8px; width: 10%;">ID</th>
-                            <th style="border: 1px solid #000; padding: 8px; width: 10%;">Name</th>
-                            <th style="border: 1px solid #000; padding: 8px; width: 25%;">Grade/Section</th>
-                            <th style="border: 1px solid #000; padding: 8px; width: 10%;">Complaint</th>
-                            <th style="border: 1px solid #000; padding: 8px;">Treatment</th>
+                            <!-- REMOVED: ID column from print view too -->
+                            <th style="border: 1px solid #000; padding: 8px; width: 15%;">Student ID</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 20%;">Name</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 20%;">Grade/Section</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 15%;">Complaint</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 20%;">Treatment</th>
                             <th style="border: 1px solid #000; padding: 8px; width: 5%;">Status</th>
-                            <th style="border: 1px solid #000; padding: 8px;">Date</th>
+                            <th style="border: 1px solid #000; padding: 8px; width: 15%;">Date</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php 
-                        if($result) $result->data_seek(0);
-                        while($row = $result->fetch_assoc()): 
+                        // Re-query all records for print (without pagination)
+                        $print_sql = "SELECT * FROM clinic_records WHERE 1=1";
+                        $print_params = array();
+                        $print_types = "";
+                        
+                        if (!empty($start_date) && !empty($end_date)) {
+                            $print_sql .= " AND date BETWEEN ? AND ?";
+                            $print_params[] = $start_date;
+                            $print_params[] = $end_date;
+                            $print_types .= "ss";
+                        }
+                        if (!empty($grade_section)) {
+                            $print_sql .= " AND grade_section = ?";
+                            $print_params[] = $grade_section;
+                            $print_types .= "s";
+                        }
+                        
+                        $print_sql .= " ORDER BY date DESC, time DESC";
+                        $print_stmt = $conn->prepare($print_sql);
+                        if (!empty($print_params)) {
+                            $print_stmt->bind_param($print_types, ...$print_params);
+                        }
+                        $print_stmt->execute();
+                        $print_result = $print_stmt->get_result();
+                        
+                        while($row = $print_result->fetch_assoc()): 
                         ?>
                         <tr>
                             <td style="border: 1px solid #000; padding: 8px;"><?php echo htmlspecialchars($row['student_id'] ?? ''); ?></td>
                             <td style="border: 1px solid #000; padding: 8px;"><strong><?php echo htmlspecialchars($row['name'] ?? ''); ?></strong></td>
                             <td style="border: 1px solid #000; padding: 8px;"><?php echo htmlspecialchars($row['grade_section'] ?? ''); ?></td>
                             <td style="border: 1px solid #000; padding: 8px;"><?php echo htmlspecialchars($row['complaint'] ?? ''); ?></td>
-                            <td style="border: 1px solid #000; padding: 8px; width: 10%;"><?php echo htmlspecialchars($row['treatment'] ?? ''); ?></td>
+                            <td style="border: 1px solid #000; padding: 8px;"><?php echo htmlspecialchars($row['treatment'] ?? ''); ?></td>
                             <td style="border: 1px solid #000; padding: 8px;">
                                 <?php echo !empty($row['treatment']) ? 'TREATED' : 'PENDING'; ?>
                             </td>
                             <td style="border: 1px solid #000; padding: 8px;"><?php echo !empty($row['date']) ? date('Y-m-d', strtotime($row['date'])) : ''; ?></td>
                         </tr>
-                        <?php endwhile; ?>
+                        <?php 
+                        endwhile; 
+                        $print_stmt->close();
+                        ?>
                     </tbody>
                 </table>
             </div>
@@ -689,10 +940,15 @@ $image_exists = file_exists($server_path);
         const reportType = document.getElementById('reportType').value;
         const gradeSection = document.getElementById('gradeSectionFilter').value;
         
-        // Update dates based on report type
-        const updatedDates = updateDatesBasedOnReportType(startDate, endDate, reportType);
+        // Build URL with all parameters (reset to page 1 when filtering)
+        let url = `?start_date=${startDate}&end_date=${endDate}&report_type=${reportType}&page=1`;
         
-        window.location.href = `?start_date=${updatedDates.startDate}&end_date=${updatedDates.endDate}&report_type=${reportType}&grade_section=${gradeSection}`;
+        // Only add grade_section if it's not empty
+        if (gradeSection) {
+            url += `&grade_section=${gradeSection}`;
+        }
+        
+        window.location.href = url;
     }
     
     function resetFilters() {
@@ -709,33 +965,40 @@ $image_exists = file_exists($server_path);
         document.getElementById('reportType').value = 'Monthly Analysis';
         document.getElementById('gradeSectionFilter').value = '';
         
-        applyFilters();
+        // Redirect without grade_section parameter
+        window.location.href = `?start_date=${firstDayStr}&end_date=${lastDayStr}&report_type=Monthly Analysis&page=1`;
     }
     
-    function updateDatesBasedOnReportType(startDate, endDate, reportType) {
-        const endDateObj = new Date(endDate);
-        let startDateObj = new Date(endDateObj);
+    function changePage(newPage) {
+        if (newPage < 1 || newPage > <?php echo $total_pages; ?>) return;
         
-        switch(reportType) {
-            case 'Weekly Analysis':
-                startDateObj.setDate(startDateObj.getDate() - 7);
-                break;
-            case 'Monthly Analysis':
-                // Set to first day of the month
-                startDateObj = new Date(endDateObj.getFullYear(), endDateObj.getMonth(), 1);
-                // Set end date to last day of the month
-                endDateObj.setMonth(endDateObj.getMonth() + 1);
-                endDateObj.setDate(0);
-                break;
-            case 'Yearly Analysis':
-                startDateObj.setFullYear(startDateObj.getFullYear() - 1);
-                break;
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+        const reportType = document.getElementById('reportType').value;
+        const gradeSection = document.getElementById('gradeSectionFilter').value;
+        
+        let url = `?start_date=${startDate}&end_date=${endDate}&report_type=${reportType}&page=${newPage}`;
+        
+        if (gradeSection) {
+            url += `&grade_section=${gradeSection}`;
         }
         
-        return {
-            startDate: startDateObj.toISOString().split('T')[0],
-            endDate: endDateObj.toISOString().split('T')[0]
-        };
+        window.location.href = url;
+    }
+    
+    function changeRecordsPerPage(perPage) {
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+        const reportType = document.getElementById('reportType').value;
+        const gradeSection = document.getElementById('gradeSectionFilter').value;
+        
+        let url = `?start_date=${startDate}&end_date=${endDate}&report_type=${reportType}&page=1&per_page=${perPage}`;
+        
+        if (gradeSection) {
+            url += `&grade_section=${gradeSection}`;
+        }
+        
+        window.location.href = url;
     }
     
     // Auto-update date range when report type changes
@@ -744,9 +1007,29 @@ $image_exists = file_exists($server_path);
         const endDateInput = document.getElementById('endDate');
         const startDateInput = document.getElementById('startDate');
         
-        const dates = updateDatesBasedOnReportType(startDateInput.value, endDateInput.value, reportType);
-        startDateInput.value = dates.startDate;
-        endDateInput.value = dates.endDate;
+        const endDate = new Date(endDateInput.value);
+        let startDate = new Date(endDate);
+        
+        switch(reportType) {
+            case 'Weekly Analysis':
+                startDate.setDate(startDate.getDate() - 7);
+                break;
+            case 'Monthly Analysis':
+                startDate = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+                break;
+            case 'Yearly Analysis':
+                startDate.setFullYear(startDate.getFullYear() - 1);
+                break;
+        }
+        
+        startDateInput.value = startDate.toISOString().split('T')[0];
+        // Only update if it's the current month end date
+        if (endDateInput.value === '<?php echo date("Y-m-t"); ?>') {
+            if (reportType === 'Monthly Analysis') {
+                const lastDay = new Date(endDate.getFullYear(), endDate.getMonth() + 1, 0);
+                endDateInput.value = lastDay.toISOString().split('T')[0];
+            }
+        }
     });
     
     // Search function
@@ -782,7 +1065,7 @@ $image_exists = file_exists($server_path);
         tr = table.getElementsByTagName("tr");
         
         for (i = 0; i < tr.length; i++) {
-            td = tr[i].getElementsByTagName("td")[6]; // Status column
+            td = tr[i].getElementsByTagName("td")[5]; // Status column (now 5 because ID column removed)
             if (td) {
                 var statusText = td.textContent || td.innerText;
                 var status = statusText.toUpperCase().includes("TREATED") ? "TREATED" : "PENDING";

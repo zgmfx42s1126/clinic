@@ -216,7 +216,7 @@ button{
 </div>
 
 <div class="form-group">
-<label>Full Name (Type if no RFID)</label>
+<label>Full Name (Input Full Name, If No RFID)</label>
 <input type="text" id="student_name" name="name" required>
 <div id="nameSuggestions"></div>
 </div>

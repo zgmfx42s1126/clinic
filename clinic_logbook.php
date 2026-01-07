@@ -271,7 +271,7 @@ body::before {
         </div>
 
         <div class="form-group" style="position:relative;">
-            <label>Full Name (Type if no RFID)</label>
+            <label>Full Name (Input Full Name, If No RFID)</label>
             <input type="text" name="name" id="student_name" value="<?php echo htmlspecialchars($name); ?>" placeholder="Type student name..." required>
             <div id="nameSuggestions"></div>
         </div>
