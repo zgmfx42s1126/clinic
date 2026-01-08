@@ -7,11 +7,18 @@ if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
-// Get filter parameters - FIXED: Default to 1st of current month
-$start_date = isset($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-01'); // 1st of current month
-$end_date = isset($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-d'); // Today
-$report_type = isset($_GET['report_type']) ? $_GET['report_type'] : 'monthly';
+// Get filter parameters - UPDATED: Default to today's report
+$report_type = isset($_GET['report_type']) ? $_GET['report_type'] : 'today';
 $grade_section = isset($_GET['grade_section']) ? $_GET['grade_section'] : '';
+
+// Set start_date and end_date based on report_type
+if ($report_type === 'today') {
+    $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-d');
+    $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-d');
+} else {
+    $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : date('Y-m-01');
+    $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : date('Y-m-d');
+}
 
 // Pagination parameters
 $records_per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 10;
@@ -347,6 +354,26 @@ if ($all_grades_result && $all_grades_result->num_rows > 0) {
     height: 12px;
     border-radius: 2px;
 }
+
+/* Print styles for charts */
+@media print {
+    .chart-wrapper canvas {
+        max-height: 300px !important;
+    }
+    
+    .chart-card {
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
+    
+    .charts-container {
+        display: block !important;
+    }
+    
+    .chart-wrapper {
+        height: 250px !important;
+    }
+}
 </style>
 </head>
 <body>
@@ -354,10 +381,10 @@ if ($all_grades_result && $all_grades_result->num_rows > 0) {
 
     <!-- Header -->
     <div class="header no-print">
-        <h1><i class="fas fa-chart-bar"></i> Statistics Report</h1>
+        <h1><i class="fas fa-chart-bar"></i> Monthly Logs Reports </h1>
         <p>Comprehensive analysis of clinic visits with charts and statistics</p>
         <div class="table-actions">
-            <button class="action-btn print" onclick="window.print()">
+            <button class="action-btn print" onclick="printWholePage()">
                 <i class="fas fa-print"></i> Print Whole Page
             </button>
         </div>
@@ -383,6 +410,7 @@ if ($all_grades_result && $all_grades_result->num_rows > 0) {
             <div class="filter-group">
                 <label for="reportType">Report Type</label>
                 <select id="reportType" class="filter-select">
+                    <option value="today" <?php echo $report_type == 'today' ? 'selected' : ''; ?>>Today's Report</option>
                     <option value="weekly" <?php echo $report_type == 'weekly' ? 'selected' : ''; ?>>Weekly Analysis</option>
                     <option value="monthly" <?php echo $report_type == 'monthly' ? 'selected' : ''; ?>>Monthly Analysis</option>
                     <option value="yearly" <?php echo $report_type == 'yearly' ? 'selected' : ''; ?>>Yearly Analysis</option>
@@ -397,6 +425,7 @@ if ($all_grades_result && $all_grades_result->num_rows > 0) {
             <button class="btn btn-secondary" onclick="resetDateFilter()">
                 <i class="fas fa-redo"></i> Reset
             </button>
+           
         </div>
     </div>
 
@@ -464,26 +493,6 @@ if ($all_grades_result && $all_grades_result->num_rows > 0) {
                     <?php endforeach; ?>
                 </div>
                 <?php endif; ?>
-            </div>
-        </div>
-        
-        <!-- Summary Statistics -->
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee;">
-            <div style="text-align: center;">
-                <div style="font-size: 24px; font-weight: bold; color: #4361ee;"><?php echo $total_records; ?></div>
-                <div style="font-size: 14px; color: #666;">Total Records</div>
-            </div>
-            <div style="text-align: center;">
-                <div style="font-size: 24px; font-weight: bold; color: #4cc9f0;"><?php echo $days_diff; ?></div>
-                <div style="font-size: 14px; color: #666;">Days Analyzed</div>
-            </div>
-            <div style="text-align: center;">
-                <div style="font-size: 24px; font-weight: bold; color: #f72585;"><?php echo $average_daily; ?></div>
-                <div style="font-size: 14px; color: #666;">Avg. Daily</div>
-            </div>
-            <div style="text-align: center;">
-                <div style="font-size: 24px; font-weight: bold; color: #7209b7;"><?php echo $weekly_users; ?></div>
-                <div style="font-size: 14px; color: #666;">Weekly Users</div>
             </div>
         </div>
     </div>
@@ -785,7 +794,6 @@ function setupSidebarToggle() {
             // Add or remove sidebar-collapsed class to body
             if (sidebar.classList.contains('collapsed')) {
                 document.body.classList.add('sidebar-collapsed');
-                // If you need to store the state in localStorage
                 localStorage.setItem('sidebarCollapsed', 'true');
             } else {
                 document.body.classList.remove('sidebar-collapsed');
@@ -830,18 +838,25 @@ function applyFilters() {
     window.location.href = url;
 }
 
-// FIXED: Reset function now sets date to 1st of current month
+// NEW: Today's Report function
+function applyTodayFilter() {
+    const today = new Date().toISOString().split('T')[0];
+    
+    document.getElementById('startDate').value = today;
+    document.getElementById('endDate').value = today;
+    document.getElementById('reportType').value = 'today';
+    
+    applyFilters();
+}
+
+// UPDATED: Reset function for today's report
 function resetDateFilter() {
     const today = new Date().toISOString().split('T')[0];
     
-    // Calculate start date as 1st of current month
-    const startDate = new Date();
-    startDate.setDate(1);
-    const startDateStr = startDate.toISOString().split('T')[0];
-    
-    document.getElementById('startDate').value = startDateStr;
+    // Set to today for default "Today's Report"
+    document.getElementById('startDate').value = today;
     document.getElementById('endDate').value = today;
-    document.getElementById('reportType').value = 'monthly';
+    document.getElementById('reportType').value = 'today';
     document.getElementById('gradeSectionFilter').value = '';
     
     const perPageSelect = document.getElementById('recordsPerPageSelect');
@@ -918,7 +933,7 @@ function printTable() {
             </style>
         </head>
         <body>
-            <h1>Monthly Logs Report</h1>
+            <h1>Monthly Logs Reports</h1>
             <div class="report-info">
                 Date Range: ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}<br>
                 ${gradeSection ? `Section: ${gradeSection}<br>` : ''}
@@ -934,41 +949,457 @@ function printTable() {
     setTimeout(() => win.print(), 500);
 }
 
-// Auto-update date range based on report type
+// UPDATED: Print Whole Page Function - Charts Only
+function printWholePage() {
+    // Get all the necessary data
+    const startDate = document.getElementById('startDate').value;
+    const endDate = document.getElementById('endDate').value;
+    const reportType = document.getElementById('reportType').value;
+    const gradeSection = document.getElementById('gradeSectionFilter').value;
+    
+    // Format dates nicely
+    const startDateFormatted = new Date(startDate).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+    
+    const endDateFormatted = new Date(endDate).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+    });
+    
+    // Get chart data statistics
+    const peakVisits = chartData.length > 0 ? Math.max(...chartData) : 0;
+    const totalVisits = chartData.reduce((a, b) => a + b, 0);
+    const avgVisits = chartData.length > 0 ? (totalVisits / chartData.length).toFixed(1) : 0;
+    
+    // Calculate days with most visits
+    let maxVisitsDay = '';
+    let maxVisits = 0;
+    if (chartLabels.length > 0 && chartData.length > 0) {
+        const maxIndex = chartData.indexOf(Math.max(...chartData));
+        maxVisitsDay = chartLabels[maxIndex];
+        maxVisits = chartData[maxIndex];
+    }
+    
+    // Create print window
+    const printWindow = window.open('', '_blank', 'width=1200,height=700');
+    
+    printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Clinic Statistics Report - ${startDateFormatted} to ${endDateFormatted}</title>
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+                
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                    font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+                }
+                
+                body {
+                    padding: 30px;
+                    color: #333;
+                    line-height: 1.5;
+                    background: white;
+                }
+                
+                .print-header {
+                    text-align: center;
+                    margin-bottom: 30px;
+                    padding-bottom: 20px;
+                    border-bottom: 2px solid #4361ee;
+                }
+                
+                .print-header h1 {
+                    color: #4361ee;
+                    font-size: 28px;
+                    margin-bottom: 10px;
+                    font-weight: 700;
+                }
+                
+                .print-header .subtitle {
+                    color: #666;
+                    font-size: 16px;
+                    margin-bottom: 15px;
+                }
+                
+                .print-info {
+                    background: #f8fafc;
+                    padding: 15px;
+                    border-radius: 8px;
+                    border: 1px solid #e2e8f0;
+                    margin-bottom: 25px;
+                    display: inline-block;
+                }
+                
+                .print-info-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                    gap: 10px;
+                }
+                
+                .info-item {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                
+                .info-label {
+                    font-weight: 600;
+                    color: #4a5568;
+                    min-width: 100px;
+                }
+                
+                .info-value {
+                    color: #2d3748;
+                }
+                
+                .section {
+                    margin-bottom: 30px;
+                    page-break-inside: avoid;
+                }
+                
+                .section-title {
+                    font-size: 18px;
+                    color: #2c3e50;
+                    margin-bottom: 15px;
+                    padding-bottom: 8px;
+                    border-bottom: 1px solid #e2e8f0;
+                    font-weight: 600;
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                }
+                
+                .section-title i {
+                    color: #4361ee;
+                }
+                
+                .stats-grid {
+                    display: grid;
+                    grid-template-columns: repeat(3, 1fr);
+                    gap: 15px;
+                    margin-bottom: 25px;
+                }
+                
+                @media print {
+                    .stats-grid {
+                        grid-template-columns: repeat(3, 1fr);
+                    }
+                }
+                
+                .stat-card-print {
+                    background: white;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 15px;
+                    text-align: center;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+                }
+                
+                .stat-icon-print {
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin: 0 auto 10px;
+                    font-size: 18px;
+                }
+                
+                .stat-number-print {
+                    font-size: 24px;
+                    font-weight: 700;
+                    color: #2c3e50;
+                    margin-bottom: 5px;
+                }
+                
+                .stat-label-print {
+                    font-size: 13px;
+                    color: #718096;
+                }
+                
+                .charts-grid {
+                    display: grid;
+                    grid-template-columns: 1fr;
+                    gap: 30px;
+                    margin-bottom: 30px;
+                }
+                
+                @media print {
+                    .charts-grid {
+                        grid-template-columns: 1fr;
+                    }
+                }
+                
+                .chart-container-print {
+                    height: 400px;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    padding: 20px;
+                    background: white;
+                    position: relative;
+                    page-break-inside: avoid;
+                }
+                
+                .chart-placeholder {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100%;
+                    color: #718096;
+                    font-style: italic;
+                    text-align: center;
+                    padding: 20px;
+                }
+                
+                .chart-title-print {
+                    text-align: center;
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: #4361ee;
+                    margin-bottom: 15px;
+                    padding-bottom: 10px;
+                    border-bottom: 1px solid #e2e8f0;
+                }
+                
+                .chart-info {
+                    font-size: 12px;
+                    color: #718096;
+                    text-align: center;
+                    margin-top: 10px;
+                    font-style: italic;
+                }
+                
+                .print-footer {
+                    margin-top: 30px;
+                    padding-top: 15px;
+                    border-top: 1px solid #e2e8f0;
+                    text-align: center;
+                    color: #718096;
+                    font-size: 13px;
+                }
+                
+                .report-summary {
+                    background: #f8fafc;
+                    padding: 20px;
+                    border-radius: 8px;
+                    margin: 20px 0;
+                    border-left: 4px solid #4361ee;
+                }
+                
+                .summary-title {
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: #4361ee;
+                    margin-bottom: 10px;
+                }
+                
+                .summary-content {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                    gap: 15px;
+                }
+                
+                .summary-item {
+                    padding: 10px;
+                    background: white;
+                    border-radius: 6px;
+                    border: 1px solid #e2e8f0;
+                }
+                
+                .summary-label {
+                    font-size: 12px;
+                    color: #718096;
+                    margin-bottom: 5px;
+                }
+                
+                .summary-value {
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: #2d3748;
+                }
+                
+                @media print {
+                    body {
+                        padding: 15px;
+                    }
+                    
+                    .section {
+                        page-break-inside: avoid;
+                    }
+                    
+                    .stats-grid {
+                        page-break-inside: avoid;
+                    }
+                    
+                    .chart-container-print {
+                        height: 350px;
+                    }
+                    
+                    .print-header h1 {
+                        font-size: 24px;
+                    }
+                    
+                    .stat-number-print {
+                        font-size: 20px;
+                    }
+                }
+            </style>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        </head>
+        <body>
+            <div class="print-header">
+                <h1><i class="fas fa-chart-bar"></i> Monthly Logs Reports</h1>
+                <div class="subtitle">Comprehensive Analysis of Clinic Visits with Charts</div>
+                <div class="print-info">
+                    <div class="print-info-grid">
+                        <div class="info-item">
+                            <span class="info-label">Report Period:</span>
+                            <span class="info-value">${startDateFormatted} ${startDate === endDate ? '' : 'to ' + endDateFormatted}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">Report Type:</span>
+                            <span class="info-value">${reportType === 'today' ? "Today's Report" : reportType.charAt(0).toUpperCase() + reportType.slice(1) + ' Analysis'}</span>
+                        </div>
+                        ${gradeSection ? `
+                        <div class="info-item">
+                            <span class="info-label">Class Filter:</span>
+                            <span class="info-value">${gradeSection}</span>
+                        </div>
+                        ` : ''}
+                        <div class="info-item">
+                            <span class="info-label">Generated:</span>
+                            <span class="info-value">${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Summary Statistics -->
+            <div class="section">
+                <div class="section-title">
+                    <i class="fas fa-chart-pie"></i> Summary Statistics
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-card-print">
+                        <div class="stat-icon-print" style="background-color: rgba(67, 97, 238, 0.1); color: #4361ee;">
+                            <i class="fas fa-school"></i>
+                        </div>
+                        <div class="stat-number-print">${<?php echo $total_classes; ?>}</div>
+                        <div class="stat-label-print">Total Number of Classes</div>
+                    </div>
+                    
+                    <div class="stat-card-print">
+                        <div class="stat-icon-print" style="background-color: rgba(76, 201, 240, 0.1); color: #4cc9f0;">
+                            <i class="fas fa-calendar-day"></i>
+                        </div>
+                        <div class="stat-number-print">${<?php echo $average_daily; ?>}</div>
+                        <div class="stat-label-print">Average Daily Visits</div>
+                    </div>
+                    
+                    <div class="stat-card-print">
+                        <div class="stat-icon-print" style="background-color: rgba(247, 37, 133, 0.1); color: #f72585;">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-number-print">${<?php echo $weekly_users; ?>}</div>
+                        <div class="stat-label-print">Average Users per Week</div>
+                    </div>
+                </div>
+                
+          
+            </div>
+            
+        
+            
+            <!-- Print Footer -->
+            <div class="print-footer">
+                <p>Report generated by Clinic Management System</p>
+                <p>Page 1 of 1</p>
+            </div>
+        </body>
+        </html>
+    `);
+    
+    printWindow.document.close();
+    
+    // Wait for content to load, then print
+    setTimeout(() => {
+        printWindow.focus();
+        printWindow.print();
+        printWindow.onafterprint = function() {
+            printWindow.close();
+        };
+    }, 1000);
+}
+
+// UPDATED: Auto-update date range based on report type
 document.getElementById('reportType').addEventListener('change', function() {
     const reportType = this.value;
-    const endDateInput = document.getElementById('endDate');
-    const startDateInput = document.getElementById('startDate');
+    const today = new Date();
+    const formatDate = (date) => {
+        return date.toISOString().split('T')[0];
+    };
     
-    const endDate = new Date(endDateInput.value);
-    let startDate = new Date(endDate);
+    let startDate = new Date(today);
+    let endDate = new Date(today);
     
     switch(reportType) {
+        case 'today':
+            // Set both dates to today
+            startDate.setDate(today.getDate());
+            endDate.setDate(today.getDate());
+            break;
         case 'weekly':
-            startDate.setDate(startDate.getDate() - 7);
+            startDate.setDate(today.getDate() - 7);
             break;
         case 'monthly':
-            startDate.setMonth(startDate.getMonth() - 1);
+            startDate.setMonth(today.getMonth() - 1);
             // Set to 1st of that month
             startDate.setDate(1);
             break;
         case 'yearly':
-            startDate.setFullYear(startDate.getFullYear() - 1);
+            startDate.setFullYear(today.getFullYear() - 1);
             // Set to January 1st of that year
             startDate.setMonth(0);
             startDate.setDate(1);
             break;
     }
     
-    const formatDate = (date) => {
-        return date.toISOString().split('T')[0];
-    };
-    
-    startDateInput.value = formatDate(startDate);
+    document.getElementById('startDate').value = formatDate(startDate);
+    document.getElementById('endDate').value = formatDate(endDate);
 });
 </script>
 </body>
 </html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 <style>
 /* Reset and Base Styles */
@@ -1659,146 +2090,3 @@ tbody tr:hover {
         border: 1px solid #ddd;
     }
 }
-
-/* Responsive Design */
-@media (max-width: 768px) {
-    .main-content {
-        padding: 15px;
-        margin-left: 0 !important;
-        width: 100% !important;
-    }
-    
-    .header {
-        padding: 20px;
-    }
-    
-    .header h1 {
-        font-size: 24px;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 10px;
-    }
-    
-    .filter-row {
-        grid-template-columns: 1fr;
-    }
-    
-    .stats-cards {
-        grid-template-columns: 1fr;
-    }
-    
-    .charts-container {
-        grid-template-columns: 1fr;
-    }
-    
-    .chart-card {
-        padding: 15px;
-    }
-    
-    .chart-wrapper {
-        height: 250px;
-    }
-    
-    .table-controls {
-        flex-direction: column;
-        align-items: stretch;
-    }
-    
-    .search-section {
-        width: 100%;
-    }
-    
-    .search-box, .grade-section-select {
-        width: 100%;
-        min-width: unset;
-    }
-    
-    .table-info {
-        width: 100%;
-        text-align: center;
-    }
-    
-    .pagination {
-        flex-wrap: wrap;
-    }
-    
-    .section-title {
-        flex-direction: column;
-        gap: 15px;
-        align-items: flex-start;
-    }
-    
-    .table-actions {
-        width: 100%;
-        justify-content: flex-start;
-    }
-}
-
-@media (max-width: 1024px) {
-    .table-controls {
-        flex-direction: column;
-        align-items: stretch;
-    }
-    
-    .search-section {
-        width: 100%;
-    }
-    
-    .search-box, .grade-section-select {
-        flex: 1;
-        min-width: unset;
-    }
-    
-    .table-info {
-        width: 100%;
-        text-align: center;
-        margin-top: 10px;
-    }
-    
-    .charts-container {
-        grid-template-columns: 1fr;
-    }
-}
-
-@media (max-width: 480px) {
-    .filter-buttons {
-        flex-direction: column;
-    }
-    
-    .btn {
-        width: 100%;
-        justify-content: center;
-    }
-    
-    .table-actions {
-        flex-direction: column;
-    }
-    
-    .action-btn {
-        width: 100%;
-        justify-content: center;
-    }
-    
-    .search-section {
-        flex-direction: column;
-    }
-    
-    .search-box, .grade-section-select {
-        width: 100%;
-    }
-    
-    .chart-title {
-        font-size: 18px;
-    }
-    
-    .chart-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 10px;
-    }
-    
-    .chart-header h3 {
-        font-size: 14px;
-    }
-}
-</style>
