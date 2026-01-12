@@ -392,9 +392,7 @@ if ($all_grades_result && $all_grades_result->num_rows > 0) {
 
     <!-- Date Range Filter -->
     <div class="date-range-filter no-print">
-        <div class="filter-title">
-            <i class="fas fa-filter"></i> Filter Options
-        </div>
+     
         
         <div class="filter-row">
             <div class="filter-group">
@@ -420,7 +418,7 @@ if ($all_grades_result && $all_grades_result->num_rows > 0) {
         
         <div class="filter-buttons">
             <button class="btn btn-primary" onclick="applyFilters()">
-                <i class="fas fa-check"></i> Apply Filter
+                   <i class="fas fa-filter"></i> Apply Filter
             </button>
             <button class="btn btn-secondary" onclick="resetDateFilter()">
                 <i class="fas fa-redo"></i> Reset
