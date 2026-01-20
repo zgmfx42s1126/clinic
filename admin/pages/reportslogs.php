@@ -357,39 +357,9 @@ $shown_now = max(0, min($records_per_page, $total_records - $offset));
 <link rel="stylesheet" href="../assets/css/reportslogs.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-<?php if ($image_exists): ?>
-<link rel="preload" as="image" href="<?php echo $web_path; ?>">
-<?php endif; ?>
-
 <style>
-.image-preloader {
-    background-image: url('<?php echo $web_path; ?>');
-    width: 0;
-    height: 0;
-    overflow: hidden;
-    visibility: hidden;
-    position: absolute;
-}
+/* ✅ REMOVED MAIN PAGE BACKGROUND WATERMARK COMPLETELY */
 
-/* ✅ Background watermark */
-.report-background { position: relative; }
-.report-background::before{
-    content:'';
-    position:absolute;
-    inset:0;
-    <?php if ($image_exists): ?>
-    background-image:url('<?php echo $web_path; ?>');
-    <?php endif; ?>
-    background-size: contain;
-    background-position: 20px 20px;
-    background-repeat:no-repeat;
-    opacity:0.10;
-    z-index:0;
-    pointer-events:none;
-}
-.report-content{ position:relative; z-index:1; }
-
-/* ✅ Match the “Complaint page” positioning */
 .main-content.report-background{
     width:100%;
 }
@@ -400,10 +370,6 @@ $shown_now = max(0, min($records_per_page, $total_records - $offset));
     padding: 18px 18px 40px;
 }
 
-/* ✅ Table controls row matches design:
-   left: search + grade filter
-   right: show per page + (optional) actions
-*/
 .table-controls{
     display:flex;
     align-items:center;
@@ -434,7 +400,6 @@ $shown_now = max(0, min($records_per_page, $total_records - $offset));
     min-width:90px;
 }
 
-/* ✅ Pagination centered like the design */
 .pagination{
     display:flex;
     justify-content:center;
@@ -461,8 +426,6 @@ $shown_now = max(0, min($records_per_page, $total_records - $offset));
 </style>
 </head>
 <body>
-
-<div class="image-preloader"></div>
 
 <div class="main-content report-background">
     <div class="report-content">
@@ -968,7 +931,7 @@ document.getElementById('reportType').addEventListener('change', function() {
 });
 
 /* ===========================
-   ✅ PRINT HELPERS (unchanged)
+   ✅ PRINT HELPERS (UNCHANGED)
    =========================== */
 function buildPagedTableHTML(tableEl, rowsPerPage = 10) {
     const thead = tableEl.querySelector('thead')?.outerHTML || '';
